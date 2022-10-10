@@ -1,0 +1,150 @@
+import numpy as np
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
+
+from dhi.dsmatch.sklearnmodeling.models.applytransformer import ApplyTransformer
+from dhi.dsmatch.sklearnmodeling.functiontransformermapper import try_func
+from dhi.dsmatch.util.datasplitters import MatrixSplitterTuple
+from dhi.dsmatch.sklearnmodeling.models.custombase import CustomTransformer
+from dhi.dsmatch.sklearnmodeling.models.mixins import RandomRightMixin
+
+                  
+class CosineSimilarityTransformer(CustomTransformer):
+    _version = '1.2'
+
+    @staticmethod
+    def _get_cossim_diag(X0, X1):
+        """Get the diagonals of pairwise cosine similarities between arrays `X0` and `X1`. That is, while
+        `cosine_similarity()` is fast when comparing arrays, we are really just getting the cosine similarity
+        of `X0[0]` with `X1[0]`, `X0[1]` with `X1[1]`, ... , `X0[n]` with `X1[n]`.
+
+        Args:
+            X0 (np.array or sparse): 1D vector. Must have the same number of elements as `X1`.
+            X1 (np.array or sparse): 1D vector. Must have the same number of elements as `X0`.
+
+        Returns:
+            np.array: Pairwise cosine similarity values.
+        """
+        return np.diag(cosine_similarity(X0, X1))
+
+    @staticmethod
+    def _get_cossim_diag_helper(X):
+        """For parallelization of `_get_cossim_diag()`, unpack the tuple then call `_get_cossim_diag()`.
+
+        Args:
+            X (tuple): A tuple of (X0, X1)]
+        """
+        X0, X1 = X
+        return CosineSimilarityTransformer._get_cossim_diag(X0, X1)
+
+    def get_cossim_diag(self, X0, X1):
+        """Get the diagonals of pairwise of cosine similarities between arrays `X0` and `X1`. That is, while
+        `cosine_similarity()` is fast when comparing arrays, we are really just getting the cosine similarity
+        of `X0[0]` with `X1[0]`, `X0[1]` with `X1[1]`, ... , `X0[n]` with `X1[n]`. This runs in parallel,
+        if possible.
+
+        Args:
+            X0 (np.array or sparse): 1D vector. Must have the same number of elements as `X1`.
+            X1 (np.array or sparse): 1D vector. Must have the same number of elements as `X0`.
+
+        Returns:
+            np.array: Pairwise cosine similarity values.
+        """
+        splitter = MatrixSplitterTuple()
+        at = ApplyTransformer(try_func, CosineSimilarityTransformer._get_cossim_diag_helper, 
+                              chunksize=1000, min_chunksize=500, 
+                              split_func=splitter.split)
+        cossims = at.transform((X0, X1)).reshape(1, -1)
+        return cossims.squeeze()
+
+    def transform(self, X):
+        """Get the diagonal cosine similarities from a "ravel'ed" vector matrix or pairwise columns of 
+        a 2D DataFrame where each column is a vector.
+
+        Args:
+            X (DataFrame or Stacked vector): If a DataFrame, this is a two column dataframe where each
+                column is a vector and we get the cosine similarity of each row. If it is a tuple of len 2, then
+                we assume the first value, `X0`, is a matrix and `X1`, the second value is the other matrix to
+                compare.
+
+        Returns:
+            2D np.array: Cosine similarity values.
+        """
+        X0, X1 = RandomRightMixin.extract_X0X1(X)
+        cossims = self.get_cossim_diag(X0, X1)
+        if not (isinstance(X, dict) or isinstance(X, pd.DataFrame)):
+            X = {'X0': X0, 'X1': X1}
+        X['score'] = cossims.reshape(-1, 1)
+        return X
+
+class CosineSimilarityRandRightTransformer(RandomRightMixin, CosineSimilarityTransformer):
+    """Works as a normal `CosineSimilarityTransformer`, but adds `get_random_scores()`
+    to cache the right column of random values and gather that distribution of scores
+    with an arbitrary left column value.
+    """
+    def __init__(self, **kwargs):
+        n_confidence_samples = kwargs.pop('n_confidence_samples', 1000)
+        super().__init__(n_confidence_samples=n_confidence_samples, **kwargs)
+        
+    @staticmethod
+    def _get_cossim(X0, X1):
+        """Get the full cosine similarity matrix of `X0` by `X1`.
+
+        Args:
+            X0 (np.array): Full or sparse array of left-side values going to `cosine_similarity()`.
+            X1 (np.array): Full or sparse array of right-side values going to `cosine_similarity()`.
+
+        Returns:
+            np.array (or sparse array): 2D numpy array of X0.shape[0] x X1.shape[0] dimensions of pairwise cosine
+                similarities.
+        """
+        return cosine_similarity(X0, X1)
+
+    @staticmethod
+    def _get_cossim_helper(X):
+        """For parallelization of `_get_cossim()`, unpack the tuple and call `_get_cossim()`
+
+        Args:
+            X (tuple): A tuple of (`X0`, `X1`)
+        """
+        X0, X1 = X
+        return CosineSimilarityRandRightTransformer._get_cossim(X0, X1)
+
+    def get_cossim(self, X0, X1):
+        """Get the full cosine similarity matrix of `X0` by `X1`, running in parallel if necessary.
+
+        Args:
+            X0 (np.array): Full or sparse array of left-side values going to `cosine_similarity()`.
+            X1 (np.array): Full or sparse array of right-side values going to `cosine_similarity()`.
+
+        Returns:
+            np.array (or sparse array): 2D numpy array of X0.shape[0] x X1.shape[0] dimensions of pairwise cosine
+                similarities.
+        """
+        if X0.shape[0] != X1.shape[0]:
+            return CosineSimilarityRandRightTransformer._get_cossim(X0, X1)
+        
+        splitter = MatrixSplitterTuple()
+        at = ApplyTransformer(try_func, CosineSimilarityRandRightTransformer._get_cossim_helper, 
+                              chunksize=1000, min_chunksize=500, 
+                              split_func=splitter.split)
+        cossims = at.transform((X0, X1))
+        return cossims
+
+    def get_random_scores(self, X):
+        """With a two-column value of scores, just take the left side and get the cosine similarity
+        of the left column compared to our random sample of training right values.
+
+        Args:
+            X (DataFrame or Stacked vector): If a DataFrame, this is a two column dataframe where each
+                column is a vector and we get the cosine similarity of each row. If it is a tuple of len 2, then
+                we assume the first value, `X0`, is a matrix and `X1`, the second value is ignored. Instead,
+                we compare `X0` with our random sample from fitting.
+
+        Returns:
+            np.array: cosine similarity scores of the left side compared to random, cached values. Each row is a
+            distribution of scores, the length of the random sample.
+        """
+        X0, X1 = RandomRightMixin.extract_X0X1(X)
+        
+        return self.get_cossim(X0, self.get_random_examples())
