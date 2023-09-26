@@ -1,0 +1,49 @@
+regex : 'on' #{on, off} default: on
+
+regex_override : 0 #{0,1} default = 0
+
+Class_number_threshold : 0.95 #{range(0, 1)} default = 0.95
+
+business_term : 1 #{0,1} default = 1
+
+policy_tag : 1 #{0,1} default = 1
+
+bayes_tfidf : 'on' #{on, off} default: on
+
+knn_tfidf : 'on' #{on, off} default: on
+
+dt_tfidf : 'on' #{on, off} default: on
+
+knn_llm : 'on' #{on, off} default: on
+
+dt_llm : 'on' #{on, off} default: on
+
+voting_config :     #{1/5, 2/5, 3/5, 4/5, 5/f} default: 3/5
+  - classifier_vote: 3
+  - total_classifiers: 5
+
+tfidf_tokens : 6000 #{5000, 6000, 262144} default=6000
+
+min_samples_classifier : 50
+
+inferred_domain : 'no' #{yes, no}
+
+inferred_identifier : 'no' # {yes, no}
+
+inferred_data_type : 'yes' # {yes, no}
+
+real_data_type : 'yes' # {yes, no}
+
+use_tablename : 'yes' # {yes, no}
+
+use_DBname : 'yes' # {yes, no}
+
+Checkpoint_mode : 'yes' # {yes, no}
+
+num_of_neighbors_knn_tfidf : 3
+
+num_of_neighbors_knn_llm : 3
+
+train_policy_models : 'yes' #{yes, no} default Yes
+
+train_business_models : 'yes' #{yes, no} default Yes
